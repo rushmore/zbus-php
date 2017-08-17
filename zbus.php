@@ -1,8 +1,7 @@
 ﻿<?php 
-class Protocol {  
-	const VERSION_VALUE = "0.8.0";       //start from 0.8.0 
-	
-	//=============================[1] Command Values================================================
+
+class Protocol {   
+	//=============================[1] Command Values===============================================
 	//MQ Produce/Consume
 	const PRODUCE       = "produce";   
 	const CONSUME       = "consume";  
@@ -11,8 +10,8 @@ class Protocol {
 	
 	//Topic control
 	const DECLARE_ = "declare";   //declare and empty keywords!!! PHP sucks
-	const QUERY   = "query"; 
-	const REMOVE  = "remove";
+	const QUERY    = "query"; 
+	const REMOVE   = "remove";
 	const EMPTY_   = "empty";   
 	
 	//High Availability (HA) 
@@ -51,6 +50,8 @@ class Protocol {
 	//Security 
 	const TOKEN   		    = "token"; 
 	
+	const HEARTBEAT   		= "heartbeat"; 
+	
 	
 	const MASK_PAUSE    	  = 1<<0; 
 	const MASK_RPC    	      = 1<<1; 
@@ -58,38 +59,79 @@ class Protocol {
 	const MASK_DELETE_ON_EXIT = 1<<3; 
 }
 
-function log_info($message){
-	error_log($message); 
+class ConsumeGroup {
+	public $topic;        //topic of the group
+	public $groupName;    
+	public $filter; 
+	public $startCopy;
+	public $startOffset;  //create group start from offset, msgId to check valid
+	public $startMsgId;
+	public $startTime;    //unix time, create group start from time 
+	
+	function __construct($groupName = null, $filter = null) {  
+		$this->groupName = $groupName;
+		$this->filter = $filter;
+	}
+	
+	public function fromMessage($msg){
+		$this->topic = $msg->getHeader(Protocol::TOPIC);
+		$this->groupName = $msg->getHeader(Protocol::CONSUME_GROUP);
+		$this->filter = $msg->getHeader(Protocol::GROUP_FILTER);
+		$this->startCopy = $msg->getHeader(Protocol::GROUP_START_COPY);
+		$this->startOffset = $msg->getHeader(Protocol::GROUP_START_OFFSET);
+		$this->startMsgId = $msg->getHeader(Protocol::GROUP_START_MSGID);
+		$this->startTime = $msg->getHeader(Protocol::GROUP_START_TIME); 
+	}
+	
+	public function toMessage($msg){
+		$msg->setHeader(Protocol::TOPIC, $this->topic);
+		$msg->setHeader(Protocol::CONSUME_GROUP, $this->groupName);
+		$msg->setHeader(Protocol::GROUP_FILTER, $this->filter);
+		$msg->setHeader(Protocol::GROUP_START_COPY, $this->startCopy);
+		$msg->setHeader(Protocol::GROUP_START_OFFSET, $this->startOffset);
+		$msg->setHeader(Protocol::GROUP_START_MSGID, $this->startMsgId);
+		$msg->setHeader(Protocol::GROUP_START_TIME, $this->startTime);
+	}
 }
-function log_debug($message){
-	error_log($message); 
-}
-function log_error($message){
-	error_log($message); 
-}
+
+ 
+class Logger { 
+	const DEBUG = 0;
+	const INFO = 1;
+	const WARN = 2;
+	const ERROR = 3; 
+	
+	public static $Level = Logger::DEBUG; 
+	
+	public static function log($level, $message){
+		if($level < Logger::$Level) return; 
+		error_log($message);
+	}  
+	
+	public static function debug($message){
+		Logger::log(Logger::DEBUG, $message); 
+	}
+	public static function info($message){
+		Logger::log(Logger::INFO, $message); 
+	}
+	public static function warn($message){
+		Logger::log(Logger::WARN, $message); 
+	}
+	public static function error($message){
+		Logger::log(Logger::ERROR, $message); 
+	}
+} 
+
 
 //borrowed from: https://stackoverflow.com/questions/2040240/php-function-to-generate-v4-uuid
 function uuid() {
-	return sprintf( '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-		// 32 bits for "time_low"
-		mt_rand( 0, 0xffff ), mt_rand( 0, 0xffff ),
-		
-		// 16 bits for "time_mid"
-		mt_rand( 0, 0xffff ),
-		
-		// 16 bits for "time_hi_and_version",
-		// four most significant bits holds version number 4
-		mt_rand( 0, 0x0fff ) | 0x4000,
-		
-		// 16 bits, 8 bits for "clk_seq_hi_res",
-		// 8 bits for "clk_seq_low",
-		// two most significant bits holds zero and one for variant DCE1.1
-		mt_rand( 0, 0x3fff ) | 0x8000,
-		
-		// 48 bits for "node"
-		mt_rand( 0, 0xffff ), mt_rand( 0, 0xffff ), mt_rand( 0, 0xffff )
+	return sprintf( '%04x%04x-%04x-%04x-%04x-%04x%04x%04x', 
+			mt_rand( 0, 0xffff ), mt_rand( 0, 0xffff ),  mt_rand( 0, 0xffff ), 
+			mt_rand( 0, 0x0fff ) | 0x4000, mt_rand( 0, 0x3fff ) | 0x8000, 
+			mt_rand( 0, 0xffff ), mt_rand( 0, 0xffff ), mt_rand( 0, 0xffff )
 	);
-}
+} 
+
 
 class ServerAddress {
 	public $address;
@@ -98,7 +140,7 @@ class ServerAddress {
 	function __construct($address, $ssl_enabled= false) {  
 		if(is_string($address)){
 			$this->address = $address;
-			$this->$ssl_enabled= $ssl_enabled; 
+			$this->ssl_enabled= $ssl_enabled; 
 			return;
 		} else if (is_array($address)){
 			$this->address = $address['address'];
@@ -144,22 +186,22 @@ class Message {
 	public $body;  
 	
 	
-	public function remove_header($name){
+	public function removeHeader($name){
 		if(!array_key_exists($name, $this->headers)) return;
 		unset($this->headers[$name]);
 	}
 	
-	public function get_header($name, $value=null) {
+	public function getHeader($name, $value = null) {
 		if(!array_key_exists($name, $this->headers)) return null;
 		return $this->headers[$name];
 	}
 	
-	public function set_header($name, $value){
+	public function setHeader($name, $value){
 		if($value === null) return;
-		unset($this->headers[$name]);
+		$this->headers[$name] = $value;
 	}
 	
-	public function set_json_body($value){
+	public function setJsonBody($value){
 		$this->headers['content-type'] = 'application/json';
 		$this->body = $value; 
 	}
@@ -210,13 +252,13 @@ class Message {
 		return $res;
 	}
 	
-	public static function decode($buf, $start=0){
+	public static function decode($buf, $start=0){ 
 		$p = strpos($buf, "\r\n\r\n", $start);
 		if($p === false) return array(null, $start);
 		$head_len = $p - $start;
 		
 		$head = substr($buf, $start, $head_len);
-		$msg = Message::decode_headers($head);
+		$msg = Message::decodeHeaders($head);
 		$body_len = 0;
 		if(array_key_exists('content-length', $msg->headers)){
 			$body_len = $msg->headers['content-length'];
@@ -231,7 +273,7 @@ class Message {
 		return array($msg, $p+4 + $body_len); 
 	}
 	 
-	private static function decode_headers($buf){
+	private static function decodeHeaders($buf){
 		$msg = new Message();
 		$lines = preg_split('/\r\n?/', $buf); 
 		$meta = $lines[0];
@@ -255,24 +297,46 @@ class Message {
 		return $msg;
 	}   
 }  
+ 
 
+function buildMessage($topicCtrl, $cmd = null){
+	if(is_string($topicCtrl)){
+		$msg = new Message();
+		$msg->topic = $topicCtrl;
+	} else if(is_object($topicCtrl) && get_class($topicCtrl) == Message::class){
+		$msg = $topicCtrl;
+	} else if(is_object($topicCtrl) && get_class($topicCtrl) == ConsumeGroup::class){
+		$msg = new Message();
+		$topicCtrl->toMessage($msg);
+	} else if(is_array($topicCtrl)){
+		$msg = new Message();
+		foreach($topicCtrl as $key => $val){
+			$msg->setHeader($key, $val);
+		}
+	} else {
+		throw new Exception("invalid: $topicCtrl");
+	}  
+	$msg->cmd = $cmd;
+	return $msg;
+}
 
-class MessageClient{ 
+class MqClient { 
 	public $sock;
+	public $token;
 	
-	private $server_address; 
-	private $ssl_cert_file;
+	private $serverAddress;
+	private $sslCertFile;
 	
-	private $recv_buf;
-	private $result_table = array();
+	private $recvBuf;
+	private $resultTable = array();
 	
-	function __construct($address, $ssl_cert_file=null){
-		$this->server_address = new ServerAddress($address);
-		$this->ssl_cert_file = $ssl_cert_file;
+	function __construct($serverAddress, $sslCertFile=null){
+		$this->serverAddress = new ServerAddress($serverAddress);
+		$this->sslCertFile = $sslCertFile;
 	}
 	
-	public function connect($timeout=3) { 
-		$address = $this->server_address->address;
+	public function connect($timeout=3) {
+		$address = $this->serverAddress->address;
 		$bb = explode(':', $address);
 		$host = $bb[0];
 		$port = 80;
@@ -280,14 +344,13 @@ class MessageClient{
 			$port = intval($bb[1]);
 		}
 		
-		log_debug("Trying connect to ($this->server_address)");
-		//$this->sock = pfsockopen($host, $port, $errno, $errstr, $timeout);
+		Logger::debug("Trying connect to ($this->serverAddress)"); 
 		$this->sock = socket_create(AF_INET, SOCK_STREAM, 0);
 		if (!socket_connect($this->sock, $host, $port)){
 			$this->throw_socket_exception("Connection to ($address) failed");
-		} 
-		log_debug("Connected to ($this->server_address)"); 
-	}  
+		}
+		Logger::debug("Connected to ($this->serverAddress)");
+	}
 	
 	public function close(){
 		if($this->sock){
@@ -296,14 +359,14 @@ class MessageClient{
 		}
 	}
 	
-	private function throw_socket_exception($msg_prefix=null){
+	private function throw_socket_exception($msgPrefix=null){
 		$errorcode = socket_last_error($this->sock);
 		$errormsg = socket_strerror($errorcode);
-		$msg = "${msg_prefix}, $errorcode:$errormsg";
-		log_error($msg);
+		$msg = "${msgPrefix}, $errorcode:$errormsg";
+		Logger::error($msg);
 		throw new Exception($msg);
 	}
-	
+
 	
 	public function invoke($msg, $timeout=3){
 		$msgid = $this->send($msg, $timeout);
@@ -318,143 +381,120 @@ class MessageClient{
 			$msg->id = uuid();
 		}
 		$buf = $msg->encode();
-		log_debug($buf);
-		$sending_buf = $buf;
-		$write_count = 0;
-		$total_count = strlen($buf);
+		Logger::debug($buf);
+		$sendingBuf = $buf;
+		$writeCount = 0;
+		$totalCount = strlen($buf);
 		while(true){
-			$n = socket_write($this->sock, $sending_buf, strlen($sending_buf));
-			//$n = fwrite($this->sock, $sending_buf, strlen($sending_buf));
+			$n = socket_write($this->sock, $sendingBuf, strlen($sendingBuf)); 
 			if($n === false) {
 				$this->throw_socket_exception("Socket write error");
 			}
-			$write_count += $n;
-			if($write_count>=$total_count) return;
+			$writeCount += $n;
+			if($writeCount>=$totalCount) return;
 			if($n > 0){
-				$sending_buf = substr($sending_buf, $n);
+				$sendingBuf = substr($sendingBuf, $n);
 			}
 		}
 		return $msg->id;
 	}
 	
-	public function recv($msgid=null, $timeout=3){ 
+	public function recv($msgid=null, $timeout=3){
 		if($this->sock == null){
 			$this->connect();
 		}
 		
-		$all_buf = '';
+		$allBuf = '';
 		while(true) {
-			if($msgid && array_key_exists($msgid, $this->result_table)){
-				return $this->result_table[$msgid];
+			if($msgid && array_key_exists($msgid, $this->resultTable)){
+				return $this->resultTable[$msgid];
 			}
 			
-			$buf_len = 4096;
-			$buf = socket_read($this->sock, $buf_len);  
-			//$buf = fread($this->sock, $buf_len);  
+			$bufLen = 4096;
+			$buf = socket_read($this->sock, $bufLen);
+			//$buf = fread($this->sock, $buf_len);
 			if($buf === false || $buf == ''){
 				$this->throw_socket_exception("Socket read error");
 			}
 			
-			$all_buf .= $buf;
+			$allBuf .= $buf;
 			
-			$this->recv_buf .= $buf;
+			$this->recvBuf .= $buf;
 			$start = 0;
 			while(true) {
-				$res = Message::decode($this->recv_buf, $start);
+				$res = Message::decode($this->recvBuf, $start);
 				$msg = $res[0];
 				$start = $res[1];
 				if($msg == null) {
 					if($start!= 0) {
-						$this->recv_buf = substr($this->recv_buf, $start); 
+						$this->recvBuf = substr($this->recvBuf, $start);
 					}
 					break;
 				}
-				$this->recv_buf = substr($this->recv_buf, $start); 
+				$this->recvBuf = substr($this->recvBuf, $start);
 				
 				if($msgid != null){
 					if($msgid != $msg->id){
-						$this->result_table[$msg->id] = $msg;
+						$this->resultTable[$msg->id] = $msg;
 						continue;
 					}
 				}
-				log_debug($all_buf);
+				Logger::debug($allBuf);
 				return $msg;
-			}   
-		} 
-	} 
-}
-
-function build_msg($cmd, $topic_or_msg, $group=null){
-	if(is_string($topic_or_msg)){
-		$msg = new Message();
-		$msg->topic = $topic_or_msg;
-	} else if(is_object($topic_or_msg) && get_class($topic_or_msg) == Message::class){
-		$msg = $topic_or_msg;
-	} else {
-		throw new Exception("invalid topic_or_msg:$topic_or_msg");
+			}
+		}
 	}
 	
-	$msg->consume_group = $group; 
-	$msg->cmd = $cmd;
-	return $msg;
-}
-
-class MqClient extends MessageClient{
-	public $token;
-	
-	public function __construct($address, $ssl_cert_file=null){
-		parent::__construct($address, $ssl_cert_file);
-	}
-	
-	private function invoke_cmd($cmd, $topic_or_msg, $group=null, $timeout=3){ 
-		$msg = build_msg($cmd, $topic_or_msg, $group);
-		$msg->token = $this->token;  
+	private function invokeCmd($cmd, $topicCtrl,$timeout=3){
+		$msg = buildMessage($topicCtrl, $cmd);
+		$msg->token = $this->token;
 		return $this->invoke($msg, $timeout);
 	}
 	
-	private function invoke_object($cmd, $topic_or_msg, $group=null, $timeout=3){
-		$res = $this->invoke_cmd($cmd, $topic_or_msg, $group, $timeout);
+	private function invokeObject($cmd, $topicCtrl, $timeout=3){
+		$res = $this->invokeCmd($cmd, $topicCtrl, $timeout);
 		if($res->status != 200){
 			throw new Exception($res->body);
-		} 
+		}
 		
 		return json_decode($res->body);
 	}
 	
+	
 	public function produce($msg, $timeout=3) {
-		return $this->invoke_cmd(Protocol::PRODUCE, $msg, null, $timeout);
+		return $this->invokeCmd(Protocol::PRODUCE, $msg, $timeout);
 	}
 	
-	public function consume($topic_or_msg, $group=null, $timeout=3){
-		$res = $this->invoke_cmd(Protocol::CONSUME, $topic_or_msg, $group, $timeout);
+	public function consume($topicCtrl, $timeout=3){
+		$res = $this->invokeCmd(Protocol::CONSUME, $topicCtrl, $timeout);
 		
-		$res->id = $res->origin_id; 
-		$res->remove_header(Protocol::ORIGIN_ID);
+		$res->id = $res->origin_id;
+		$res->removeHeader(Protocol::ORIGIN_ID);
 		if($res->status == 200){
 			if($res->origin_url != null){
 				$res->url = $res->origin_url;
 				$res->status = null;
-				$res->remove_header(Protocol::ORIGIN_URL);
+				$res->removeHeader(Protocol::ORIGIN_URL);
 			}
 		}
 		return $res;
 	}
 	
-	public function query($topic_or_msg, $group=null, $timeout=3){
-		return $this->invoke_object(Protocol::QUERY, $topic_or_msg, $group, $timeout);
+	public function query($topicCtrl, $timeout=3){
+		return $this->invokeObject(Protocol::QUERY, $topicCtrl, $timeout);
 	}
 	
-	public function declare_($topic_or_msg, $group=null, $timeout=3){
-		return $this->invoke_object(Protocol::DECLARE_, $topic_or_msg, $group, $timeout);
+	public function declare_($topicCtrl, $timeout=3){
+		return $this->invokeObject(Protocol::DECLARE_, $topicCtrl, $timeout);
 	}
 	
-	public function remove($topic_or_msg, $group=null, $timeout=3){
-		return $this->invoke_object(Protocol::REMOVE, $topic_or_msg, $group, $timeout);
+	public function remove($topicCtrl, $timeout=3){
+		return $this->invokeObject(Protocol::REMOVE, $topicCtrl, $timeout);
 	}
 	
-	public function empty_($topic_or_msg, $group=null, $timeout=3){
-		return $this->invoke_object(Protocol::EMPTY_, $topic_or_msg, $group, $timeout);
-	}  
+	public function empty_($topicCtrl, $timeout=3){
+		return $this->invokeObject(Protocol::EMPTY_, $topicCtrl, $timeout);
+	}
 	
 	public function route($msg, $timeout=3){
 		$msg->cmd = Protocol::ROUTE;
@@ -464,233 +504,659 @@ class MqClient extends MessageClient{
 		}
 		return $this->send($msg, $timeout);
 	}  
+	
 }
 
+
+class MqClientAsync { 
+	use EventEmitter;
+	
+	public $token;
+	public $serverAddress;
+	
+	private $stream;
+	private $loop; 
+	private $sslCertFile;
+	
+	private $recvBuffer;
+	private $callbackTable = array();
+	
+	private $heartbeator;
+	private $heartbeatInterval = 60; //60seconds
+	private $connectTimeout = 3;
+	private $autoReconnect = true;
+	private $connectTimer;
+	
+	function __construct($address, $loop, $sslCertFile=null, $heartbeatInterval=60){
+		$this->serverAddress= new ServerAddress($address);
+		$this->loop = $loop;
+		$this->sslCertFile= $sslCertFile;
+		
+		$this->heartbeatInterval = $heartbeatInterval;
+		$that = $this;
+		
+		$this->heartbeator = $loop->addTimer($this->heartbeatInterval, function() use($that){
+			$that->heartbeat();
+		}, true);
+	}
+	
+	public function fork(){
+		return new MqclientAsync($this->serverAddress, $this->loop, $this->sslCertFile, $this->heartbeatInterval);
+	}
+	
+	public function connect(callable $connected = null) {
+		$address = $this->serverAddress->address;
+		Logger::debug('Trying connect to ' . $address);
+		$context = array();
+		$errno = null;
+		$errstr = null;
+		$socket = @stream_socket_client(
+				'tcp://'.$address,
+				$errno,
+				$errstr,
+				0,
+				STREAM_CLIENT_ASYNC_CONNECT | STREAM_CLIENT_CONNECT,
+				stream_context_create($context)
+				);
+		
+		if($socket === false) {
+			$this->emit('error', array(new Exception("Connection to ($address) failed, $errstr")));
+			return;
+		} 
+		
+		$client = $this; 
+		$this->stream = null;
+		
+		$this->connectTimer = $this->loop->addTimer($this->connectTimeout, function() 
+				use($client, $socket, $connected, $address){  
+			
+			if(is_resource($socket) && stream_socket_get_name($socket, true) === false){
+				$client->loop->removeWriteStream($socket);
+				fclose($socket);
+			}   
+			
+			if ($client->stream == null) {
+				Logger::warn('Connection (' . $address . ') timeout');
+				if($client->autoReconnect){
+					$client->connect($connected);
+				}
+			}  
+		});
+		
+		$this->loop->addWriteStream($socket, function($socket) use($client, $connected, $address){ 
+			$client->loop->removeWriteStream($socket);
+			
+			if (stream_socket_get_name($socket, true) === false ) { 
+				fclose($socket); 
+				return;
+			}  
+			Logger::debug('Connected to (' . $address . ')');
+			$client->createStream($socket, $connected);
+		});
+	}
+	
+	private function createStream($socket, $connected) {	 
+		$client = $this;
+		$client->stream = new Stream($socket, $client->loop); 
+		if($connected){
+			$connected();
+		}
+		$client->emit('connected'); 
+		
+		$client->stream->on('data', function($data) use($client) {
+			$client->recvBuffer .= $data;
+			$start = 0;
+			while(true) {
+				$res = Message::decode($client->recvBuffer, $start);
+				$msg = $res[0];
+				$start = $res[1];
+				if($msg === null) {
+					if($start != 0) {
+						$client->recvBuffer = substr($client->recvBuffer, $start);
+					}
+					break;
+				}
+				
+				$callback = @$client->callbackTable[$msg->id];
+				if($callback !== null){
+					try{
+						unset($client->callbackTable[$msg->id]);
+						$callback($msg);
+					} catch (Exception $e){
+						Logger::error($e->getMessage());
+					}
+				} else {
+					$client->emit('message', array($msg));
+				}
+			}
+			
+		});
+			
+		$client->stream->on('error', function($data) use($client){
+			$client->emit('error', array($data));
+		});
+			
+		$client->stream->on('close', function($data) use($client){
+			$client->emit('close', array($data));
+		});
+			
+		$client->stream->on('drain', function() use($client){
+			$client->emit('drain', array());
+		});  
+	} 
+	
+	public function close(){
+		if($this->stream !== null){
+			$this->stream->close();
+		} 
+		$this->loop->cancelTimer($this->connectTimer);
+		$this->loop->cancelTimer($this->heartbeator);
+	}
+	
+	protected function heartbeat(){
+		if($this->stream == null || !$this->stream->isActive()) return;
+		$msg = new Message();
+		$msg->cmd = Protocol::HEARTBEAT;
+		$this->invoke($msg);
+	}
+	
+	public function invoke($msg, callable $callback = null){
+		if($msg->id == null){
+			$msg->id = uuid();
+		}
+		if($callback){
+			$this->callbackTable[$msg->id] = $callback;
+		}
+		
+		$buf = $msg->encode(); 
+		$this->stream->write($buf);
+	}
+	
+	
+	private function invokeCmd($cmd, $topicCtrl, callable $callback = null){
+		$msg = buildMessage($topicCtrl, $cmd);
+		$msg->token = $this->token;
+		return $this->invoke($msg, $callback);
+	}
+	
+	private function invokeObject($cmd, $topicCtrl, callable $callback = null){
+		$this->invokeCmd($cmd, $topicCtrl, function($res) use($callback){ 
+			if($res->status != 200){
+				$error = new Exception($res->body); 
+				$callback(array('error' => $error)); 
+				return;
+			} 
+			try{
+				$obj = json_decode($res->body);
+				$callback($obj); 
+			} catch (Exception $e){
+				$callback(array('error' => $e)); 
+			}
+		});
+	}
+	
+	public function query($topicCtrl, callable $callback = null){
+		return $this->invokeObject(Protocol::QUERY, $topicCtrl, $callback);
+	}
+	
+	public function declare_($topicCtrl, callable $callback = null){
+		return $this->invokeObject(Protocol::DECLARE_, $topicCtrl, $callback);
+	}
+	
+	public function remove($topicCtrl, $callback = null){
+		return $this->invokeCmd(Protocol::REMOVE, $topicCtrl, $callback);
+	}
+	
+	public function empty_($topicCtrl, $callback= null){
+		return $this->invokeCmd(Protocol::EMPTY_, $topicCtrl, $callback); 
+	}
+	
+	public function produce($msg, callable $callback=null) {
+		if($callback == null){
+			$msg->ack = false;
+		}
+		return $this->invokeCmd(Protocol::PRODUCE, $msg, $callback);
+	}
+	
+	public function consume($topicCtrl, callable $callback){
+		$this->invokeCmd(Protocol::CONSUME, $topicCtrl, function($res) use($callback){
+			$res->id = $res->origin_id;
+			$res->removeHeader(Protocol::ORIGIN_ID);
+			if($res->status == 200){
+				if($res->origin_url != null){
+					$res->url = $res->origin_url;
+					$res->removeHeader(Protocol::ORIGIN_URL);
+				}
+			}
+			if($callback) $callback($res);
+		});
+	}
+	
+	public function route($msg){
+		$msg->cmd = Protocol::ROUTE;
+		if($msg->status != null){
+			$msg->setHeader(Protocol::ORIGIN_STATUS, $msg->status);
+			$msg->status = null;
+		}
+		return $this->invoke($msg);
+	}
+} 
  
 class BrokerRouteTable {
-	public $topic_table = array();   //{ TopicName => [TopicInfo] }
-	public $server_table = array();  //{ ServerAddress => ServerInfo }
-	public $votes_table = array();   //{ TrackerAddress => Vote } , Vote=(version, servers)
-	private $vote_factor = 0.5;
+	public $topicTable = array();   //{ TopicName => [TopicInfo] }
+	public $serverTable = array();  //{ ServerAddress => ServerInfo }
+	public $votesTable = array();   //{ TrackerAddress => Vote } , Vote=(version, servers) 
+	public $voteFactor = 0.5;
 	
-	public function update_tracker($tracker_info){
+	
+	private $votedTrackers = array(); // { TrackerAddress => true }
+	
+	public function updateTracker($trackerInfo){
 		//1) Update votes
-		$tracker_address = new ServerAddress($tracker_info['serverAddress']);
-		$vote = @$this->votes_table[$tracker_address];
+		$trackerAddress = new ServerAddress($trackerInfo['serverAddress']);
+		$vote = @$this->votesTable[$trackerAddress];
+		$this->votedTrackers[(string)$trackerAddress] = true;
 		
-		if($vote && $vote['version'] >=  $tracker_info['infoVersion']){
+		if($vote && $vote['version'] >=  $trackerInfo['infoVersion']){
 			return;
 		}
 		$servers = array();
-		$server_table = $tracker_info['serverTable'];
-		foreach($server_table as $key => $server_info){ 
-			array_push($servers, new ServerAddress($server_info['serverAddress']));
+		$serverTable = $trackerInfo['serverTable'];
+		foreach($serverTable as $key => $serverInfo){ 
+			array_push($servers, new ServerAddress($serverInfo['serverAddress']));
 		}
 		 
-		$this->votes_table[(string)$tracker_address] = array('version'=>$tracker_info['infoVersion'], 'servers'=>$servers);
+		$this->votesTable[(string)$trackerAddress] = array('version'=>$trackerInfo['infoVersion'], 'servers'=>$servers);
 		
 		//2) Merge ServerTable
-		foreach($server_table as $key => $server_info){
-			$server_address = new ServerAddress($server_info['serverAddress']);
-			$this->server_table[(string)$server_address] = $server_info; 
+		foreach($serverTable as $key => $serverInfo){
+			$serverAddress = new ServerAddress($serverInfo['serverAddress']);
+			$this->serverTable[(string)$serverAddress] = $serverInfo; 
 		} 
 		
 		//3) Purge
 		return $this->purge();
 	}
 	
-	public function remove_tracker($tracker_address){
-		$tracker_address = new ServerAddress($tracker_address);
-		unset($this->votes_table[(string)$tracker_address]);
+	public function removeTracker($trackerAddress){
+		$trackerAddress = new ServerAddress($trackerAddress);
+		unset($this->votesTable[(string)$trackerAddress]);
 		return $this->purge();
 	}
 	
 	private function purge(){
-		$to_remove = array(); 
-		$server_table_local = $this->server_table;
-		foreach($server_table_local as $key => $server_info){
-			$server_address = new ServerAddress($server_info['serverAddress']); 
+		$toRemove = array(); 
+		$serverTableLocal = $this->serverTable;
+		foreach($serverTableLocal as $key => $server_info){
+			$serverAddress = new ServerAddress($server_info['serverAddress']); 
 			$count = 0;
-			foreach($this->votes_table as $key => $vote){
+			foreach($this->votesTable as $key => $vote){
 				$servers = $vote['servers'];
-				if(in_array((string)$server_address, $servers)) $count++;
+				if(in_array((string)$serverAddress, $servers)) $count++;
 			}
-			if($count < count($this->votes_table)*$this->vote_factor){
-				array_push($to_remove, $server_address);
-				unset($server_table_local[(string)$server_address]);
-			}
-			
+			if($count < count($this->votedTrackers)*$this->voteFactor){
+				array_push($toRemove, $serverAddress);
+				unset($serverTableLocal[(string)$serverAddress]);
+			} 
 		} 
-		$this->server_table = $server_table_local;
+		$this->serverTable = $serverTableLocal;
 		
-		$this->rebuild_topic_table();  
-		return $to_remove;
+		$this->rebuildTopicTable();  
+		return $toRemove;
 	}
 	
-	private function rebuild_topic_table(){
-		$topic_table = array();
-		foreach($this->server_table as $server_key => $server_info){
-			foreach($server_info['topicTable'] as $topic_key => $topic_info){
-				$topic_list = @$topic_table[$topic_key];
-				if($topic_list == null){
-					$topic_list = array();
+	private function rebuildTopicTable(){
+		$topicTable = array();
+		foreach($this->serverTable as $server_key => $serverInfo){
+			foreach($serverInfo['topicTable'] as $topicKey => $topicInfo){
+				$topicList = @$topicTable[$topicKey];
+				if($topicList == null){
+					$topicList = array();
 				}
-				array_push($topic_list, $topic_info);
-				$topic_table[$topic_key] = $topic_list;
+				array_push($topicList, $topicInfo);
+				$topicTable[$topicKey] = $topicList;
 			}
 		}
-		$this->topic_table = $topic_table;
+		$this->topicTable = $topicTable;
 	}
 }
 
+class TrackerSubscriber {
+	public $client;
+	public $readyCount = 0;
+	public $readyTriggered = false;
 
-class Broker { 
-	public $route_table;
-	private $pool_table = array();
-	private $ssl_cert_file_table = array();
+	public function __construct($client){
+		$this->client = $client;
+	}
+}
+
+class Broker {  
+	use EventEmitter;
 	
-	public function __construct($tracker_address_list=null){ 
-		$this->route_table = new BrokerRouteTable();
+	public $routeTable;
+	 
+	private $syncEnabled = false;  
+	private $clientTable = array(); //store MqClientAsync or MqClient
+	
+	private $sslCertFileTable = array();
+	private $loop;
+	private $autoReconnectTimeout = 3; 
+
+	private $trackerSubscribers = array();  
+	private $readyTriggered = false; //any tracker tiggered is considered broker ready triggered.
+	
+	public function __construct(EventLoop $loop, $trackerAddressList = null, $syncEnabled = false){ 
+		$this->loop = $loop;
+		$this->routeTable = new BrokerRouteTable();
+		$this->syncEnabled = $syncEnabled;
 		
-		if($tracker_address_list){
-			$bb = explode(';', $tracker_address_list);
-			foreach($bb as $tracker_address){
-				$this->add_tracker($tracker_address);
+		if($trackerAddressList){
+			$bb = explode(';', $trackerAddressList);
+			foreach($bb as $trackerAddress){
+				$this->addTracker($trackerAddress);
 			} 
 		}
 	}
 	
-	public function add_tracker($tracker_address, $ssl_cert_file=null, $timeout=3){
-		$client = new MqClient($tracker_address, $ssl_cert_file);
-		$msg = new Message();
-		$msg->cmd = Protocol::TRACKER;
-		
-		$res = $client->invoke($msg, $timeout);
-		if($res->status != 200){
-			throw new Exception($res->body);
-		}
-		
-		$tracker_info = json_decode($res->body, true); //to array
-		$this->route_table->update_tracker($tracker_info);
-	} 
-	
-	public function select($selector, $msg){
-		$address_list = $selector($this->route_table, $msg);
-		if(!is_array($address_list)){
-			$address_list = array($address_list);
-		}
-		
-		$client_array = array();
-		foreach($address_list as $address){
-			$client = @$this->pool_table[(string)$address];
-			if($client == null){
-				$client = new MqClient($address, @$this->ssl_cert_file_table[$address->address]); //TODO SSL
-				$this->pool_table[(string)$address] = $client;
+	public function addTracker($trackerAddress, $sslCertFile=null){
+		$client = new MqClientAsync($trackerAddress, $this->loop, $sslCertFile);
+		$trackerSubscriber = new TrackerSubscriber($client);
+		$this->trackerSubscribers[$trackerAddress] = $trackerSubscriber;
+		$broker = $this;
+		$remoteTrackerAddress = $trackerAddress;
+		$client->on('message', function($msg) use($broker, $trackerSubscriber, &$remoteTrackerAddress, $sslCertFile){ 
+			if($msg->status != 200){
+				Logger::error('track_sub status warning');
+				return;
 			}
-			array_push($client_array, $client);
+			
+			$trackerInfo = json_decode($msg->body, true); 
+			
+			$remoteTrackerAddress = new ServerAddress($trackerInfo['serverAddress']); 
+			if($sslCertFile) {
+				$broker->sslCertFileTable[(string)$remoteTrackerAddress] = $sslCertFile;
+			}
+			if(@$this->trackerSubscribers[(string)$remoteTrackerAddress] === null){
+				$this->trackerSubscribers[(string)$remoteTrackerAddress] = $trackerSubscriber;
+			}
+			if (!$trackerSubscriber->readyTriggered){
+				$trackerSubscriber->readyCount = count($trackerInfo['serverTable']);
+			}
+
+			$toRemove = $this->routeTable->updateTracker($trackerInfo);
+			$serverTable = $broker->routeTable->serverTable;
+			foreach ($serverTable as $key=>$serverInfo){
+				$broker->addServer($serverInfo, $trackerSubscriber);
+			}
+			foreach ($toRemove as $key=>$serverAddress){
+				$broker->removeServer($serverAddress);
+			} 
+			
+			$broker->emit('trackerUpdate', array($broker)); 
+		});
+		
+		$client->on('close', function() use($client, $broker, &$remoteTrackerAddress) { 
+			$toRemove = $broker->routeTable->removeTracker($remoteTrackerAddress);
+			foreach ($toRemove as $key => $serverAddress){
+				$broker->removeServer($serverAddress);
+			} 
+		});
+		
+		$client->on('connected', function() use($client){
+			$msg = new Message();
+			$msg->cmd = Protocol::TRACK_SUB;
+			$client->invoke($msg);
+		});  
+		
+		$client->on('error', function($error) use($client, $broker){
+			Logger::error($error->getMessage());
+			$broker->loop->addTimer($broker->autoReconnectTimeout, function() use($client) { 
+				$client->connect();
+			});
+		});
+		
+		$client->connect();  
+	} 
+	 
+	private function addServer($serverInfo,  $trackerSubscriber) { 
+		$serverAddress = new ServerAddress($serverInfo['serverAddress']);
+		$client = @$this->clientTable[(string)$serverAddress];
+		if($client !== null){
+			return; //client already exists
 		} 
-		return $client_array;
+		$sslCertFile = @$this->sslCertFileTable[(string)$serverAddress];
+		$client = $this->createClient($serverAddress, $this->loop, $sslCertFile); 
+		$this->clientTable[(string)$serverAddress] = $client;
+		$broker = $this;
+		
+		if($broker->syncEnabled){ //for sync mode
+			$broker->emit('serverJoin', array($client));
+			if(!$trackerSubscriber->readyTriggered) {
+				$trackerSubscriber->readyCount--;
+				if($trackerSubscriber->readyCount <= 0) {
+					if(!$broker->readyTriggered){
+						$broker->emit('ready');
+						$broker->readyTriggered = true;
+					}
+					$trackerSubscriber->readyTriggered = true;
+				}
+			}  
+			return;
+		}
+		
+		//async MqClient 
+		$client->on('connected', function() use($broker, $client, $serverAddress,  $trackerSubscriber) {  
+			$broker->emit('serverJoin', array($client));
+			if(!$trackerSubscriber->readyTriggered) {
+				$trackerSubscriber->readyCount--;
+				if($trackerSubscriber->readyCount <= 0) {
+					if(!$broker->readyTriggered){
+						$broker->emit('ready'); 
+						$broker->readyTriggered = true;
+					} 
+					$trackerSubscriber->readyTriggered = true; 
+				}
+			} 
+		});
+		$client->connect();
+	}
+	 
+	
+	private function removeServer($serverAddress) {  
+		$client = @$this->clientTable[(string)$serverAddress];
+		if($client === null){
+			return; 
+		}
+		$this->emit('serverLeave', array($serverAddress));
+		unset($this->clientTable[(string)$serverAddress]);
+		$client->close();
+	}
+	
+	private function createClient($serverAddress, $sslCertFile=null){
+		if($this->syncEnabled){
+			return new MqClient($serverAddress, $sslCertFile);
+		}
+		return new MqClientAsync($serverAddress, $this->loop, $sslCertFile);
+	}
+	 
+
+	public function select($selector, $msg){
+		$addressList = $selector($this->routeTable, $msg);
+		if(!is_array($addressList)){
+			$addressList = array($addressList);
+		}
+		
+		$clientSelected = array();
+		foreach($addressList as $address){
+			$client = @$this->clientTable[(string)$address];
+			if($client == null){ 
+				Logger::warn("Missing client for " . $address);
+				continue;
+			}
+			array_push($clientSelected, $client);
+		} 
+		return $clientSelected;
 	} 
 	
 	public function close(){
-		foreach($this->pool_table as $key=>$client){
+		foreach($this->trackerSubscribers as $key=>$sub){
+			$sub->client->close();
+		}
+		$this->trackerSubscribers = array();
+		
+		foreach($this->clientTable as $key=>$client){
 			$client->close();
 		}
-		$this->pool_table = array();
+		$this->clientTable = array();
+	} 
+	
+	public function isSync(){
+		return $this->syncEnabled;
 	}
 }
 
-class MqAdmin {
+class MqAdmin { 
 	protected $broker; 
-	protected $admin_selector;
+	protected $adminSelector;
 	protected $token;
 	public function __construct($broker){
 		$this->broker = $broker;
-		$this->admin_selector = function($route_table, $msg){
-			$server_table = $route_table->server_table;
-			$address_array = array();
-			foreach($server_table as $key => $server_info){
-				$server_address = new ServerAddress($server_info['serverAddress']);
-				array_push($address_array, $server_address);
+		$this->adminSelector = function($routeTable, $msg){
+			$serverTable = $routeTable->serverTable;
+			$addressArray = array();
+			foreach($serverTable as $key => $serverInfo){
+				$serverAddress = new ServerAddress($serverInfo['serverAddress']);
+				array_push($addressArray, $serverAddress);
 			}
-			return $address_array;
+			return $addressArray;
 		};
 	} 
 	
-	private function invoke_cmd($cmd, $topic_or_msg, $group=null, $timeout=3, $selector=null){ 
-		$msg = build_msg($cmd, $topic_or_msg, $group);
+	private function invokeCmdAsync($cmd, $topicCtrl, callable $callback, $selector=null){ 
+		if($this->broker->isSync()){
+			throw new Exception("async should be enabled in broker");
+		}
+		$msg = buildMessage($topicCtrl, $cmd);
 		if($msg->token == null) $msg->token = $this->token;
 		
-		if($selector == null) $selector = $this->admin_selector;
-		$client_array = $this->broker->select($selector, $msg);
-		$res = array();
-		foreach ($client_array as $client){
-			try {
-				$msg_res = $client->invoke($msg, $timeout); 
-				array_push($res, $msg_res);
-			} catch (Exception $e) {
-				array_push($res, $e);
-			}
+		if($selector == null) $selector = $this->adminSelector;
+		$clientArray = $this->broker->select($selector, $msg); 
+		foreach ($clientArray as $client){ 
+			$client->invoke($msg, $callback);  
+		} 
+	} 
+	
+	private function invokeObjectAsync($cmd, $topicCtrl, callable $callback, $selector=null){ 
+		if($this->broker->isSync()){
+			throw new Exception("async should be enabled in broker");
 		}
-		return  $res;
-	}
-	private function invoke_object($cmd, $topic_or_msg, $group=null, $timeout=3, $selector=null){ 
-		$cmd_res = $this->invoke_cmd($cmd, $topic_or_msg, $group, $timeout, $selector);
-		$res = array();
-		foreach($cmd_res as $msg){
+		
+		$this->invokeCmdAsync($cmd, $topicCtrl, function($msg) use($callback){
+			$data = null;
 			if($msg->status != 200){
-				$e = new Exception($msg->body);
-				array_push($res, $e);
-				continue;
-			} 
-			array_push($res, json_decode($msg->body));
+				$data= new Exception($msg->body);
+			} else {
+				$data = json_decode($msg->body);
+			}
+			call_user_func($callback, $data);
+		}, $selector);  
+	}
+	
+	private function invokeCmd($cmd, $topicCtrl, $timeout = 3, $selector=null){
+		if(!$this->broker->isSync()){
+			throw new Exception("sync should be enabled in broker");
 		}
-		return $res;
+		$msg = buildMessage($topicCtrl, $cmd);
+		if($msg->token == null) $msg->token = $this->token;
+		
+		if($selector == null) $selector = $this->adminSelector;
+		$clientArray = $this->broker->select($selector, $msg);
+		$resArray = array();
+		foreach ($clientArray as $client){
+			$res = $client->invoke($msg, $timeout);
+			array_push($resArray, $res);
+		}
+		return $resArray;
 	}
 	
-	public function query($topic_or_msg, $group=null, $timeout=3, $selector=null){  
-		return $this->invoke_object(Protocol::QUERY, $topic_or_msg, $group, $timeout, $selector);
+	private function invokeObject($cmd, $topicCtrl, $timeout = 3, $selector=null){
+		if(!$this->broker->isSync()){
+			throw new Exception("sync should be enabled in broker");
+		}
+		
+		$msgArray = $this->invokeCmd($cmd, $topicCtrl, $timeout, $selector);
+		$resArray = array();
+		foreach($msgArray as $key=>$msg){
+			$res = null;
+			if($msg->status != 200){
+				$res = new Exception($msg->body);
+			} else {
+				$res = json_decode($msg->body);
+			}
+			array_push($resArray, $res);
+		}
+		return $resArray;
 	}
 	
-	public function declare_($topic_or_msg, $group=null, $timeout=3, $selector=null){ 
-		return $this->invoke_object(Protocol::DECLARE_, $topic_or_msg, $group, $timeout, $selector);
+	public function query($topicCtrl, $timeout = 3, $selector=null){
+		return $this->invokeObject(Protocol::QUERY, $topicCtrl, $timeout, $selector);
 	}
 	
-	public function remove($topic_or_msg, $group=null, $timeout=3, $selector=null){ 
-		return $this->invoke_cmd(Protocol::REMOVE, $topic_or_msg, $group, $timeout, $selector);
+	public function queryAsync($topicCtrl, callable $callback, $selector=null){  
+		$this->invokeObjectAsync(Protocol::QUERY, $topicCtrl, $callback, $selector);
 	}
 	
-	public function empty_($topic_or_msg, $group=null, $timeout=3, $selector=null){ 
-		return $this->invoke_cmd(Protocol::EMPTY_, $topic_or_msg, $group, $timeout, $selector);
+	public function declare_($topicCtrl, $timeout = 3, $selector=null){
+		return $this->invokeObject(Protocol::DECLARE_, $topicCtrl, $timeout, $selector);
+	}
+	
+	public function declareAsync($topicCtrl, callable $callback, $selector=null){ 
+		$this->invokeObjectAsync(Protocol::DECLARE_, $topicCtrl, $callback, $selector);
+	}
+	
+	public function remove($topicCtrl, $timeout = 3, $selector=null){
+		return $this->invokeCmd(Protocol::REMOVE, $topicCtrl, $timeout, $selector);
+	}
+	
+	public function removeAsync($topicCtrl, callable $callback, $selector=null){ 
+		$this->invokeCmdAsync(Protocol::REMOVE, $topicCtrl, $callback, $selector);
+	}
+	public function empty_($topicCtrl, $timeout = 3, $selector=null){
+		return $this->invokeCmd(Protocol::EMPTY_, $topicCtrl, $timeout, $selector);
+	}  
+	
+	public function emptyAsync($topicCtrl, callable $callback, $selector=null){ 
+		$this->invokeCmdAsync(Protocol::EMPTY_, $topicCtrl, $callback, $selector);
 	}  
 }
 
 class Producer extends  MqAdmin{
-	protected $produce_selector;
+	protected $produceSelector;
 	
 	public function __construct($broker){
 		parent::__construct($broker);
 		
-		$this->produce_selector= function($route_table, $msg){
+		$this->produceSelector= function($routeTable, $msg){
 			if($msg->topic == null){
 				throw new Exception("Missing topic");
 			}
-			if(count($route_table->server_table) < 1) {
+			if(count($routeTable->serverTable) < 1) {
 				return array();
 			}
-			$topic_table = $route_table->topic_table;
-			$server_list = @$topic_table[$msg->topic];
-			if($server_list == null || count($server_list) < 1){
+			$topicTable = $routeTable->topicTable;
+			$serverList = @$topicTable[$msg->topic];
+			if($serverList == null || count($serverList) < 1){
 				return array();
 			}
 			$target = null;
-			foreach($server_list as $topic_info){
+			foreach($serverList as $topicInfo){
 				if($target == null){
-					$target = $topic_info;
+					$target = $topicInfo;
 					continue;
 				}
-				if($target['consumerCount']<$topic_info['consumerCount']){
-					$target = $topic_info;
+				if($target['consumerCount']<$topicInfo['consumerCount']){
+					$target = $topicInfo;
 				}
 			}
 			$res = array();
@@ -699,71 +1165,169 @@ class Producer extends  MqAdmin{
 		};
 	}
 	
-	public function produce($msg, $timeout=3, $selector=null){
-		if($selector == null) $selector = $this->produce_selector;
+	public function publishAsync($msg, callable $callback, $selector=null){
+		if($selector == null) $selector = $this->produceSelector;
 		
 		$msg->cmd = Protocol::PRODUCE;
 		if($msg->token == null) $msg->token = $this->token;
 		
-		$client_array = $this->broker->select($selector, $msg);
-		if(count($client_array) < 1){
+		$clientArray = $this->broker->select($selector, $msg);
+		if(count($clientArray) < 1){
 			throw new Exception("Missing MqServer for $msg");
 		}
 		
-		$client = $client_array[0];
+		foreach ($clientArray as $key => $client){
+			$client->invoke($msg, $callback); 
+		} 
+	}
+	
+	public function publish($msg, $timeout = 3, $selector=null){
+		if($selector == null) $selector = $this->produceSelector;
 		
-		return $client->invoke($msg, $timeout); 
+		$msg->cmd = Protocol::PRODUCE;
+		if($msg->token == null) $msg->token = $this->token;
+		
+		$clientArray = $this->broker->select($selector, $msg);
+		if(count($clientArray) < 1){
+			throw new Exception("Missing MqServer for $msg");
+		}
+		
+		$resArray = array();
+		foreach ($clientArray as $key => $client){
+			$res = $client->invoke($msg, $timeout );
+			array_push($resArray, $res);
+		}
+		if(count($resArray) == 1){
+			return $resArray[0];
+		}
+		return $resArray;
 	}
 	
 }
 
 class Consumer extends  MqAdmin{
-	public $message_handler;
+	public $messageHandler;
 	public $topic;
-	public $consume_group = array();
+	public $consumeGroup;
 	
-	public $consume_selector;
-	public function __construct($broker, $topic){
+	public $consumeSelector;
+	public $connectionCount = 1;
+	public $consumeClientTable = array();
+	
+	
+	public function __construct($broker, $topic, $consumeGroup = null){
 		parent::__construct($broker);
 		$this->topic = $topic;
+		$this->consumeGroup = $consumeGroup;
+		if($this->consumeGroup == null){
+			$this->consumeGroup = new ConsumeGroup();
+		}
 		
-		$this->consume_selector= function($route_table, $msg){
-			$server_table = $route_table->server_table;
-			$address_array = array();
-			foreach($server_table as $key => $server_info){
-				$server_address = new ServerAddress($server_info['serverAddress']);
-				array_push($address_array, $server_address);
+		$this->consumeSelector = function($routeTable, $msg){
+			$serverTable = $routeTable->serverTable;
+			$addressArray = array();
+			foreach($serverTable as $key => $serverInfo){
+				$serverAddress = new ServerAddress($serverInfo['serverAddress']);
+				array_push($addressArray, $serverAddress);
 			}
-			return $address_array;
+			return $addressArray;
 		};
 	} 
 	
-	public function start(){ 
-		$msg = new Message();
+	public function start(){   
+		$c = $this;
+		$this->broker->on('serverJoin', function($client) use($c){ 
+			$c->consumeToServer($client);
+		});
+		
+		$this->broker->on('serverLeave', function($serverAddress) use($c){
+			$c->leaveServer($serverAddress);
+		}); 
+	}
+	
+	private function consumeToServer($client){ 
+		$serverAddress = $client->serverAddress;
+		$clientList= @$this->consumeClientTable[(string)$serverAddress];
+		if($clientList !== null) {
+			return;
+		} 
+		
+		$msg = buildMessage($this->consumeGroup);
 		$msg->topic = $this->topic;
-		$msg->token = $this->token;
-		foreach($this->consume_group as $key=>$value){
-			$msg->set_header($key, $value);
+		$msg->token = $this->token; 
+		
+		$clientList = array(); 
+		for($i=0; $i<$this->connectionCount;$i++){
+			$forkedClient = $client->fork();
+			array_push($clientList, $forkedClient);
+			$this->consume($forkedClient, $msg); 
+		}  
+		$this->consumeClientTable[(string)$serverAddress] = $clientList; 
+	}
+	
+	private function leaveServer($serverAddress){
+		$clientList = @$this->consumeClientTable[(string)$serverAddress];
+		if($clientList === null) return;
+		
+		foreach ($clientList as $key => $client){
+			$client->close();
+		} 
+		unset($this->consumeClientTable[(string)$serverAddress]);
+	}
+	
+	private function consume($client, $consumeCtrl){
+		$consumer = $this;
+		$client->on('connected', function() use($consumer, $client, $consumeCtrl){
+			$client->declare_($consumeCtrl, function($res) use($consumer, $client, $consumeCtrl){
+				if(is_a($res, 'Exception')){
+					Logger::error('Declare error: ' . $res->getMessage());
+					return;
+				}
+				$client->consume($consumeCtrl, function($res) use($consumer, $client, $consumeCtrl){
+					$consumer->consumeCallback($client, $consumeCtrl, $res);
+				});
+			});
+		});
+			
+		$client->connect();
+	}
+	
+	private function consumeCallback($client, $consumeCtrl, $res){
+		$consumer = $this;
+		if($res->status == 404){
+			$client->declare_($consumeCtrl, function($res) use($consumer, $client, $consumeCtrl){
+				if(is_a($res, 'Exception')){
+					Logger::error('Declare error: ' . $res->getMessage());
+					return;
+				}
+				$client->consume($consumeCtrl, function($res) use($consumer, $client,$consumeCtrl){
+					$consumer->consumeCallback($client, $consumeCtrl, $res);
+				});
+			});
+			return;
 		}
 		
-		$client_array = $this->broker->select($this->consume_selector, $msg);
-		//TODO: select on socket to handle multiple socket
-		if(count($client_array)<1) return ;
+		$originUrl = $res->origin_url;
+		$id = $res->origin_id;
+		$res->removeHeader('origin_url');
+		$res->removeHeader('origin_id');
+		if($originUrl !== null){
+			$res->url = $originUrl;
+		}
+		$res->id = $id;
 		
-		$client = $client_array[0];
-		$func = $this->message_handler;
-		while(true){
-			$res = $client->consume($msg);
-			
-			if($func != null){
-				try{
-					$func($res, $client);
-				}catch (Exception $e){
-					log_error($e);
-				}
+		if($this->messageHandler !== null){
+			try{
+				call_user_func($this->messageHandler, $res, $client); 
+			} catch (Exception $e){
+				Logger::warn($e->getMessage());
+			} finally {
+				$client->consume($consumeCtrl, function($res) use($consumer,$client, $consumeCtrl){
+					$consumer->consumeCallback($client, $consumeCtrl, $res);
+				});
 			}
-		}  
-	}
+		}
+	} 
 } 
 
 
@@ -809,49 +1373,107 @@ class RpcInvoker {
 	
 	public $topic;
 	public $module;
-	public $rpc_selector;
+	public $rpcSelector;
+	public $rpcTimeout = 3;
+	
+	private $broker;
 	
 	public function __construct($broker, $topic){ 
+		$this->broker = $broker;
 		$this->producer = new Producer($broker);
 		$this->topic = $topic;
 	} 
 	
 	public function __call($method, $args){
+		if($this->broker->isSync()){
+			return $this->callSync($method, $args);
+		}
+		
+		$this->callAsync($method, $args);
+	}
+	
+	private function callSync($method, $args){ 
 		$request = new Request($method, $args);
 		$request->module = $this->module;
 		
-		$response = $this->invoke($request, 3, $this->rpc_selector);
-		
+		$response = $this->invoke($request, $this->rpcTimeout, $this->rpcSelector);
 		if($response->error != null){
-			if(is_object($response) && is_a($response, Exception::class)){
-				throw  $response->error;
-			}
 			throw new RpcException((string)$response->error);
 		}
-		return  $response->result;
+		return $response->result; 
 	}
 	
-	public function invoke($request, $timeout=3, $selector=null){
-		if($selector == null) $selector = $this->rpc_selector; 
+	
+	private function callAsync($method, $args){
+		$params = array_slice($args, 0, count($args)-1);
+		$callback = $args[count($args)-1];
+		
+		$request = new Request($method, $params);
+		$request->module = $this->module;
+		
+		$this->invokeAsync($request, function($response) use($callback){
+			if($response->error != null){
+				if(is_object($response) && is_a($response, Exception::class)){
+					$error = $response->error;
+				} else {
+					$error = new RpcException((string)$response->error);
+				}
+				
+				call_user_func($callback, $error);
+				return;
+			}
+			call_user_func($callback, $response->result);
+		}, $this->rpcSelector);
+	}
+	
+	public function invokeAsync($request, callable $callback, $selector=null){
+		if($selector == null) $selector = $this->rpcSelector; 
 		
 		$msg = new Message();
 		$msg->topic = $this->topic;
 		$msg->token = $this->token; 
 		$msg->ack = 0;
 		
-		$rpc_body = json_encode($request);
-		$msg->set_json_body($rpc_body);
+		$rpcBody = json_encode($request);
+		$msg->setJsonBody($rpcBody);
 		
-		$msg_res = $this->producer->produce($msg, $timeout, $selector);
-		if($msg_res->status != 200){
-			throw new RpcException($msg_res->body);
-		} 
+		$this->producer->publishAsync($msg, function($msgRes) use($callback){
+			if($msgRes->status != 200){
+				$res = new RpcException($msgRes->body);
+				call_user_func($callback, $res);
+				return;
+			}
+			
+			$arr = json_decode($msgRes->body, true);
+			$res = new Response();
+			$res->error = @$arr['error'];
+			$res->result = @$arr['result'];
+			
+			call_user_func($callback, $res);
+			
+		}, $selector);  
+	} 
+	
+	public function invoke($request, $timeout=3, $selector=null){
+		if($selector == null) $selector = $this->rpcSelector;
 		
-		$arr = json_decode($msg_res->body, true);
+		$msg = new Message();
+		$msg->topic = $this->topic;
+		$msg->token = $this->token;
+		$msg->ack = 0;  //RPC no need ack
+		
+		$rpcBody = json_encode($request);
+		$msg->setJsonBody($rpcBody);
+		
+		$msgRes = $this->producer->publish($msg, $timeout, $selector); 
+		if($msgRes->status != 200){
+			throw new RpcException($msgRes->body); 
+		}
+		
+		$arr = json_decode($msgRes->body, true);
 		$res = new Response();
 		$res->error = @$arr['error'];
 		$res->result = @$arr['result'];
-		
 		return $res;
 	} 
 }
@@ -859,25 +1481,25 @@ class RpcInvoker {
 class RpcProcessor {
 	private $methods = array(); 
 	
-	public function add_module($service, $module=null){ 
+	public function addModule($service, $module=null){ 
 		if(is_string($service)){
 			$service = new $service();
 		}
-		$service_class = get_class($service);
-		$class = new ReflectionClass($service_class);
+		$serviceClass = get_class($service);
+		$class = new ReflectionClass($serviceClass);
 		$methods = $class->getMethods(ReflectionMethod::IS_PUBLIC & ~ReflectionMethod::IS_STATIC);
 		foreach($methods as $method){ 
-			$key = $this->gen_key($module, $method->name);
+			$key = $this->genKey($module, $method->name);
 			$this->methods[$key] = array($method, $service); 
 		} 
 	}
 	
-	private function gen_key($module, $method_name){
+	private function genKey($module, $method_name){
 		return "$module:$method_name";
 	}
 	
 	private function process($request){
-		$key = $this->gen_key($request->module, $request->method);
+		$key = $this->genKey($request->module, $request->method);
 		$m = @$this->methods[$key];
 		if($m == null){
 			throw new ErrorException("Missing method $key");
@@ -896,11 +1518,11 @@ class RpcProcessor {
 	}
 	
 	
-	public function message_handler($msg, $client){
-		$msg_res = new Message();
-		$msg_res->recver = $msg->sender;
-		$msg_res->id = $msg->id;
-		$msg_res->status = 200;
+	public function messageHandler($msg, $client){
+		$msgRes = new Message();
+		$msgRes->recver = $msg->sender;
+		$msgRes->id = $msg->id;
+		$msgRes->status = 200;
 		
 		$response = new Response();
 		try{
@@ -913,13 +1535,581 @@ class RpcProcessor {
 			$response = $this->process($request); 
 			
 		} catch (Exception $e){
-			$response->error = $e;
+			$response->error = $e->getMessage();
 		}
-		$json_res = json_encode($response);
-		$msg_res->set_json_body($json_res);
+		$jsonRes = json_encode($response);
+		$msgRes->setJsonBody($jsonRes);
 		
-		$client->route($msg_res);
+		$client->route($msgRes);
 	}
-} 
+}
 
-?> 
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+//EventLoop support in the following
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+trait EventEmitter {
+	protected $listeners = [];
+	protected $onceListeners = [];
+	
+	public function on($event, callable $listener) {
+		if (!isset($this->listeners[$event])) {
+			$this->listeners[$event] = [];
+		}
+		$this->listeners[$event][] = $listener;
+		return $this;
+	}
+	
+	public function once($event, callable $listener) {
+		if (!isset($this->onceListeners[$event])) {
+			$this->onceListeners[$event] = [];
+		}
+		$this->onceListeners[$event][] = $listener;
+		return $this;
+	}
+	
+	public function removeListener($event, callable $listener){
+		if (isset($this->listeners[$event])) {
+			$index = \array_search($listener, $this->listeners[$event], true);
+			if (false !== $index) {
+				unset($this->listeners[$event][$index]);
+				if (\count($this->listeners[$event]) === 0) {
+					unset($this->listeners[$event]);
+				}
+			}
+		}
+		if (isset($this->onceListeners[$event])) {
+			$index = \array_search($listener, $this->onceListeners[$event], true);
+			if (false !== $index) {
+				unset($this->onceListeners[$event][$index]);
+				if (\count($this->onceListeners[$event]) === 0) {
+					unset($this->onceListeners[$event]);
+				}
+			}
+		}
+	}
+	
+	public function removeAllListeners($event = null) {
+		if ($event !== null) {
+			unset($this->listeners[$event]);
+		} else {
+			$this->listeners = [];
+		}
+		if ($event !== null) {
+			unset($this->onceListeners[$event]);
+		} else {
+			$this->onceListeners = [];
+		}
+	}
+	
+	public function listeners($event) {
+		return array_merge(
+				isset($this->listeners[$event]) ? $this->listeners[$event] : [],
+				isset($this->onceListeners[$event]) ? $this->onceListeners[$event] : []
+				);
+	}
+	
+	public function emit($event, array $arguments = []) {
+		if (isset($this->listeners[$event])) {
+			foreach ($this->listeners[$event] as $listener) {
+				$listener(...$arguments);
+			}
+		}
+		if (isset($this->onceListeners[$event])) {
+			$keys = array_keys($this->onceListeners[$event]);
+			foreach ($keys as $key) {
+				$listener = $this->onceListeners[$event][$key];
+				$listener(...$arguments);
+				unset($this->onceListeners[$event][$key]);
+			}
+			if (count($this->onceListeners[$event]) === 0) {
+				unset($this->onceListeners[$event]);
+			}
+		}
+	}
+}
+
+
+// stream_select() based event-loop.
+class EventLoop {
+	const MICROSECONDS_PER_SECOND = 1000000;
+	
+	private $futureTickQueue;
+	private $timers;
+	private $readStreams = [];
+	private $readListeners = [];
+	private $writeStreams = [];
+	private $writeListeners = [];
+	private $running;
+	
+	public function __construct() {
+		$this->futureTickQueue = new TickQueue();
+		$this->timers = new Timers();
+	}
+	
+	public function addReadStream($stream, callable $listener) {
+		$key = (int) $stream;
+		if (!isset($this->readStreams[$key])) {
+			$this->readStreams[$key] = $stream;
+			$this->readListeners[$key] = $listener;
+		}
+	}
+	
+	public function addWriteStream($stream, callable $listener) {
+		$key = (int) $stream;
+		if (!isset($this->writeStreams[$key])) {
+			$this->writeStreams[$key] = $stream;
+			$this->writeListeners[$key] = $listener;
+		}
+	}
+	
+	public function removeReadStream($stream) {
+		$key = (int) $stream;
+		unset(
+				$this->readStreams[$key],
+				$this->readListeners[$key]
+				);
+	}
+	
+	public function removeWriteStream($stream) {
+		$key = (int) $stream;
+		unset(
+				$this->writeStreams[$key],
+				$this->writeListeners[$key]
+				);
+	}
+	
+	public function removeStream($stream) {
+		$this->removeReadStream($stream);
+		$this->removeWriteStream($stream);
+	}
+	
+	public function addTimer($interval, callable $callback, $periodic=false) {
+		$timer = new Timer($interval, $callback, (bool)$periodic);
+		$this->timers->add($timer);
+		return $timer;
+	}
+	
+	public function cancelTimer(Timer $timer) {
+		$this->timers->cancel($timer);
+	}
+	
+	public function isTimerActive(Timer $timer) {
+		return $this->timers->contains($timer);
+	}
+	
+	public function futureTick(callable $listener) {
+		$this->futureTickQueue->add($listener);
+	}
+	
+	public function runOnce() {
+		$this->run(true);
+	}
+	
+	public function run($exit_on_empty=false) {
+		$this->running = true;
+		while ($this->running) {
+			$this->futureTickQueue->tick();
+			$this->timers->tick();
+			
+			// tick queue has pending callbacks ...
+			if (!$this->running || !$this->futureTickQueue->isEmpty()) {
+				$timeout = 0;
+				
+				// There is a pending timer, only block until it is due ...
+			} elseif ($scheduledAt = $this->timers->getFirst()) {
+				$timeout = $scheduledAt - $this->timers->getTime();
+				if ($timeout < 0) {
+					$timeout = 0;
+				} else {
+					$timeout = round($timeout * self::MICROSECONDS_PER_SECOND);
+				}
+				
+				// The only possible event is stream activity, so wait forever ...
+			} elseif ($this->readStreams || $this->writeStreams) {
+				$timeout = null;
+			} else {
+				if ($exit_on_empty){
+					break;
+				}
+				$timeout = round(0.01 * self::MICROSECONDS_PER_SECOND);
+			}
+			
+			$this->waitForStreamActivity($timeout);
+		}
+	}
+	
+	public function stop() {
+		$this->running = false;
+	}
+	
+	private function waitForStreamActivity($timeout) {
+		$read  = $this->readStreams;
+		$write = $this->writeStreams;
+		
+		$available = $this->streamSelect($read, $write, $timeout);
+		if ($available === false) {
+			return;
+		}
+		
+		foreach ($read as $stream) {
+			$key = (int) $stream;
+			
+			if (isset($this->readListeners[$key])) {
+				call_user_func($this->readListeners[$key], $stream, $this);
+			}
+		}
+		
+		foreach ($write as $stream) {
+			$key = (int) $stream;
+			
+			if (isset($this->writeListeners[$key])) {
+				call_user_func($this->writeListeners[$key], $stream, $this);
+			}
+		}
+	}
+	
+	protected function streamSelect(array &$read, array &$write, $timeout) {
+		if ($read || $write) {
+			$except = null;
+			// suppress warnings that occur, when stream_select is interrupted by a signal
+			return @stream_select($read, $write, $except, $timeout === null ? null : 0, $timeout);
+		}
+		
+		$timeout && usleep($timeout);
+		return 0;
+	}
+}
+
+
+final class TickQueue {
+	private $queue;
+	
+	public function __construct() {
+		$this->queue = new SplQueue();
+	}
+	
+	public function add(callable $listener) {
+		$this->queue->enqueue($listener);
+	}
+	
+	public function tick() {
+		$count = $this->queue->count();
+		while ($count--) {
+			call_user_func( $this->queue->dequeue() );
+		}
+	}
+	
+	public function isEmpty() {
+		return $this->queue->isEmpty();
+	}
+}
+
+final class Timer {
+	const MIN_INTERVAL = 0.000001;
+	
+	private $interval;
+	private $callback;
+	private $periodic;
+	
+	public function __construct($interval, callable $callback, $periodic = false) {
+		if ($interval < self::MIN_INTERVAL) {
+			$interval = self::MIN_INTERVAL;
+		}
+		$this->interval = (float) $interval;
+		$this->callback = $callback;
+		$this->periodic = (bool) $periodic;
+	}
+	
+	public function getInterval() {
+		return $this->interval;
+	}
+	
+	public function getCallback() {
+		return $this->callback;
+	}
+	
+	public function isPeriodic() {
+		return $this->periodic;
+	}
+}
+
+
+final class Timers {
+	private $time;
+	private $timers;
+	private $scheduler;
+	
+	public function __construct() {
+		$this->timers = new SplObjectStorage();
+		$this->scheduler = new SplPriorityQueue();
+	}
+	
+	public function updateTime() {
+		return $this->time = microtime(true);
+	}
+	
+	public function getTime() {
+		return $this->time ?: $this->updateTime();
+	}
+	
+	public function add(Timer $timer) {
+		$interval = $timer->getInterval();
+		$scheduledAt = $interval + microtime(true);
+		
+		$this->timers->attach($timer, $scheduledAt);
+		$this->scheduler->insert($timer, -$scheduledAt);
+	}
+	
+	public function contains(Timer $timer) {
+		return $this->timers->contains($timer);
+	}
+	
+	public function cancel(Timer $timer) {
+		$this->timers->detach($timer);
+	}
+	
+	public function getFirst() {
+		while ($this->scheduler->count()) {
+			$timer = $this->scheduler->top();
+			
+			if ($this->timers->contains($timer)) {
+				return $this->timers[$timer];
+			}
+			
+			$this->scheduler->extract();
+		}
+		
+		return null;
+	}
+	
+	public function isEmpty() {
+		return count($this->timers) === 0;
+	}
+	
+	public function tick() {
+		$time = $this->updateTime();
+		$timers = $this->timers;
+		$scheduler = $this->scheduler;
+		
+		while (!$scheduler->isEmpty()) {
+			$timer = $scheduler->top();
+			
+			if (!isset($timers[$timer])) {
+				$scheduler->extract();
+				$timers->detach($timer);
+				
+				continue;
+			}
+			
+			if ($timers[$timer] >= $time) {
+				break;
+			}
+			
+			$scheduler->extract();
+			call_user_func($timer->getCallback(), $timer);
+			
+			if ($timer->isPeriodic() && isset($timers[$timer])) {
+				$timers[$timer] = $scheduledAt = $timer->getInterval() + $time;
+				$scheduler->insert($timer, -$scheduledAt);
+			} else {
+				$timers->detach($timer);
+			}
+		}
+	}
+}
+
+
+class Stream {
+	use EventEmitter;
+	
+	private $stream;
+	private $loop;
+	private $softLimit;
+	private $readBufferSize;
+	
+	private $writable = true;
+	private $readable = true;
+	private $closed = false;
+	
+	private $data = '';
+	
+	public function __construct($stream, EventLoop $loop, $writeBufferSoftLimit = null, $readChunkSize = null) {
+		if (!is_resource($stream) || get_resource_type($stream) !== "stream") {
+			throw new \InvalidArgumentException('Stream required');
+		}
+		
+		$meta = stream_get_meta_data($stream);
+		if (isset($meta['mode']) && $meta['mode'] !== '' && strpos($meta['mode'], '+') === false) {
+			throw new InvalidArgumentException('Given stream resource is not opened in read and write mode');
+		}
+		
+		if (stream_set_blocking($stream, 0) !== true) {
+			throw new \RuntimeException('Unable to set non-blocking mode');
+		}
+		
+		$this->stream = $stream;
+		$this->loop = $loop;
+		$this->softLimit = ($writeBufferSoftLimit === null) ? 65536 : (int)$writeBufferSoftLimit;
+		$this->readBufferSize= ($readChunkSize === null) ? 65536 : (int)$readChunkSize;
+		
+		$this->resume();
+	} 
+	
+	public function isActive(){
+		return !$this->closed;
+	}
+	
+	public function pause() {
+		$this->loop->removeReadStream($this->stream);
+	}
+	
+	public function resume() {
+		if ($this->readable) {
+			$this->loop->addReadStream($this->stream, array($this, 'handleRead')); 
+		}
+	}
+	
+	public function write($data) {
+		if (!$this->writable) {
+			return false;
+		}
+		
+		$this->data .= $data;
+		if ($this->data !== '') {
+			$this->loop->addWriteStream($this->stream, array($this, 'handleWrite'));
+		}
+		
+		return !isset($this->data[$this->softLimit - 1]);
+	}
+	
+	public function end($data = null) {
+		if (null !== $data) {
+			$this->write($data);
+		}
+		
+		$this->readable = false;
+		$this->writable = false;
+		
+		// close immediately if buffer is already empty
+		// otherwise wait for buffer to flush first
+		if ($this->data === '') {
+			$this->close();
+		}
+	}
+	
+	public function close() {
+		if ($this->closed) {
+			return;
+		}
+		
+		$this->loop->removeStream($this->stream);
+		
+		$this->closed = true;
+		$this->readable = false;
+		$this->writable = false;
+		$this->data = '';
+		
+		$this->emit('close', array($this));
+		//$this->removeAllListeners();
+		
+		$this->handleClose();
+	}
+	
+	public function handleClose() {
+		if (is_resource($this->stream)) {
+			fclose($this->stream);
+		}
+	}
+	
+	
+	public function handleRead() {
+		$error = null;
+		set_error_handler(function ($errno, $errstr, $errfile, $errline) use (&$error) {
+			$error = new ErrorException(
+					$errstr,
+					0,
+					$errno,
+					$errfile,
+					$errline
+					);
+		});
+			
+			$data = stream_get_contents($this->stream, $this->readBufferSize);
+			
+			restore_error_handler();
+			
+			if ($error !== null) {
+				$this->close();
+				$this->emit('error', array(new RuntimeException('Unable to read from stream: ' . $error->getMessage(), 0, $error)));
+				
+				return;
+			}
+			
+			if ($data !== '') {
+				$this->emit('data', array($data));
+			} else {
+				// no data read => we reached the end and close the stream
+				$this->close();
+				$this->emit('error', array(new RuntimeException('Closed by remote server')) );
+			}
+	}
+	
+	
+	public function handleWrite() {
+		$error = null;
+		set_error_handler(function ($errno, $errstr, $errfile, $errline) use (&$error) {
+			$error = array(
+					'message' => $errstr,
+					'number' => $errno,
+					'file' => $errfile,
+					'line' => $errline
+			);
+		});
+			
+			$sent = fwrite($this->stream, $this->data);
+			
+			restore_error_handler();
+			
+			// Only report errors if *nothing* could be sent.
+			// Any hard (permanent) error will fail to send any data at all.
+			// Sending excessive amounts of data will only flush *some* data and then
+			// report a temporary error (EAGAIN) which we do not raise here in order
+			// to keep the stream open for further tries to write.
+			// Should this turn out to be a permanent error later, it will eventually
+			// send *nothing* and we can detect this.
+			if ($sent === 0 || $sent === false) {
+				if ($error !== null) {
+					$error = new ErrorException(
+							$error['message'],
+							0,
+							$error['number'],
+							$error['file'],
+							$error['line']
+							);
+				}
+				
+				$this->close();
+				$this->emit('error', array(new RuntimeException('Unable to write to stream: ' . ($error !== null ? $error->getMessage() : 'Unknown error'), 0, $error)));
+				
+				return;
+			}
+			
+			$exceeded = isset($this->data[$this->softLimit - 1]);
+			$this->data = (string) substr($this->data, $sent);
+			
+			// buffer has been above limit and is now below limit
+			if ($exceeded && !isset($this->data[$this->softLimit - 1])) {
+				$this->emit('drain');
+			}
+			
+			// buffer is now completely empty => stop trying to write
+			if ($this->data === '') {
+				$this->loop->removeWriteStream($this->stream);
+				
+				// buffer is end()ing and now completely empty => close buffer
+				if (!$this->writable) {
+					$this->close();
+				}
+			}
+	}
+}

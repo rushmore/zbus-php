@@ -1,7 +1,6 @@
 <?php  
-require_once '../zbus.php';
+require_once '../../zbus.php';
  
-
 class MyService{  
 	
 	public function getString($msg){
@@ -24,15 +23,16 @@ class MyService{
 $service = new MyService();
 
 $processor = new RpcProcessor();
-$processor->add_module($service);
+$processor->addModule($service);
 
  
-$broker = new Broker("localhost:15555"); 
+$loop = new EventLoop();
+
+$broker = new Broker($loop, "localhost:15555;localhost:15556"); 
 $c = new Consumer($broker, "MyRpc"); 
-$c->message_handler = array($processor, 'message_handler');
+$c->connectionCount = 2;
+$c->messageHandler = array($processor, 'messageHandler');
 
 $c->start();
-
-$broker->close();
-
-?> 
+echo 'MyRpc service started' . PHP_EOL;
+$loop->run();
