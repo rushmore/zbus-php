@@ -29,7 +29,10 @@ $processor->addModule($service);
 $loop = new EventLoop();
 
 $broker = new Broker($loop, "localhost:15555;localhost:15556"); 
-$c = new Consumer($broker, "MyRpc"); 
+$ctrl = new Message();
+$ctrl->topic = "MyRpc";
+$ctrl->topic_mask = Protocol::MASK_MEMORY | Protocol::MASK_RPC;
+$c = new Consumer($broker, $ctrl); 
 $c->connectionCount = 2;
 $c->messageHandler = array($processor, 'messageHandler');
 

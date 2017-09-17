@@ -52,11 +52,12 @@ class Protocol {
 	
 	const HEARTBEAT   		= "heartbeat"; 
 	
-	
-	const MASK_PAUSE    	  = 1<<0; 
-	const MASK_RPC    	      = 1<<1; 
-	const MASK_EXCLUSIVE 	  = 1<<2;  
-	const MASK_DELETE_ON_EXIT = 1<<3; 
+	const MASK_MEMORY    	 = 1<<0;
+    const MASK_RPC    	     = 1<<1;
+    const MASK_PROXY    	 = 1<<2;
+    const MASK_PAUSE    	 = 1<<3;
+    const MASK_EXCLUSIVE 	 = 1<<4;
+    const MASK_DELETE_ON_EXIT= 1<<5;
 }
 
 class ConsumeGroup {
@@ -1252,8 +1253,9 @@ class Consumer extends  MqAdmin{
 			return;
 		} 
 		
-		$msg = buildMessage($this->consumeGroup);
-		$msg->topic = $this->topic;
+		$msg = buildMessage($this->topic);
+		$this->consumeGroup->topic = $msg->topic;
+		$this->consumeGroup->toMessage($msg); 
 		$msg->token = $this->token; 
 		
 		$clientList = array(); 
